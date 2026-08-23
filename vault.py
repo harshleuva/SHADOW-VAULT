@@ -319,10 +319,16 @@ class VaultGUI:
         self.vault_data = vault
         self.log_audit("Successful Login", "Master password verified successfully.")
 
-        if "_2fa_secret" not in self.vault_data:
-            self.setup_2fa()
+        # SafeAuth is optional. If disabled, the master password is enough to unlock.
+        # The existing 2FA secret is kept so it can be enabled again later.
+        safeauth_enabled = self.vault_data.get("_safeauth_enabled", False)
+        if safeauth_enabled:
+            if "_2fa_secret" not in self.vault_data:
+                self.setup_2fa()
+            else:
+                self.verify_2fa_window()
         else:
-            self.verify_2fa_window()
+            self.show_main_dashboard()
 
     def setup_2fa(self):
         new_secret = pyotp.random_base32()
@@ -419,10 +425,36 @@ class VaultGUI:
         style.theme_use("clam")
         
         # Explicitly map active/selected states to match row backgrounds so hovering causes zero color shifts
-        style.configure("Treeview", background="#1e1e1e", foreground="#ffffff", fieldbackground="#1e1e1e", font=("Consolas", self.font_size), rowheight=self.font_size + 14)
-        style.configure("Treeview.Heading", background="#2d2d2d", foreground="#00ff66", font=("Consolas", self.font_size, "bold"))
-        style.map("Treeview", background=[('selected', '#1e1e1e'), ('active', '#1e1e1e')], foreground=[('selected', '#ffffff'), ('active', '#ffffff')])
-        
+        style.configure(
+            "Treeview",
+            background="#1e1e1e",
+            foreground="#ffffff",
+            fieldbackground="#1e1e1e",
+            font=("Consolas", self.font_size),
+            rowheight=self.font_size + 14
+        )
+        style.configure(
+            "Treeview.Heading",
+            background="#2d2d2d",
+            foreground="#00ff66",
+            font=("Consolas", self.font_size, "bold")
+        )
+
+        # Keep the column-heading bar stable. No white hover effect.
+        style.map(
+            "Treeview.Heading",
+            background=[("active", "#2d2d2d")],
+            foreground=[("active", "#00ff66")]
+        )
+
+        # Keep selection stable; row hover is handled with tags below.
+        style.map(
+            "Treeview",
+            # Selected rows stay highlighted even after the mouse leaves.
+            background=[("selected", "#006b45"), ("active", "#1e1e1e")],
+            foreground=[("selected", "#ffffff"), ("active", "#ffffff")]
+        )
+
         columns = ("Title", "Type", "Username / Info")
         self.tree = ttk.Treeview(self.root, columns=columns, show="headings", height=13)
         self.tree.heading("Title", text="Target / Title")
@@ -432,6 +464,35 @@ class VaultGUI:
         self.tree.column("Type", width=140)
         self.tree.column("Username / Info", width=330)
         self.tree.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+
+        # Highlight the row currently under the mouse.
+        self.tree.tag_configure("hover", background="#333333", foreground="#ffffff")
+        self._hovered_tree_item = None
+
+        def on_tree_motion(event):
+            item = self.tree.identify_row(event.y)
+
+            if item == self._hovered_tree_item:
+                return
+
+            if self._hovered_tree_item and self.tree.exists(self._hovered_tree_item):
+                tags = [t for t in self.tree.item(self._hovered_tree_item, "tags") if t != "hover"]
+                self.tree.item(self._hovered_tree_item, tags=tags)
+
+            self._hovered_tree_item = item
+
+            if item:
+                tags = [t for t in self.tree.item(item, "tags") if t != "hover"]
+                self.tree.item(item, tags=("hover", *tags))
+
+        def on_tree_leave(event):
+            if self._hovered_tree_item and self.tree.exists(self._hovered_tree_item):
+                tags = [t for t in self.tree.item(self._hovered_tree_item, "tags") if t != "hover"]
+                self.tree.item(self._hovered_tree_item, tags=tags)
+            self._hovered_tree_item = None
+
+        self.tree.bind("<Motion>", on_tree_motion)
+        self.tree.bind("<Leave>", on_tree_leave)
 
         self.refresh_table()
 
@@ -461,7 +522,7 @@ class VaultGUI:
         query = self.search_var.get().lower() if hasattr(self, "search_var") else ""
 
         for title, creds in self.vault_data.items():
-            if title in ("_2fa_secret", "_logs"):
+            if title in ("_2fa_secret", "_logs", "_safeauth_enabled") or not isinstance(creds, dict):
                 continue
             
             e_type = creds.get("type", "login")
@@ -483,7 +544,7 @@ class VaultGUI:
 
             self.tree.insert("", tk.END, values=(title, e_type.capitalize(), preview), tags=(title,))
 
-    def show_settings_screen(self):
+    def show_settings_screen(self, active_tab="🔑 Master Password"):
         self.clear_window()
         self.root.geometry("950x680")
 
@@ -505,7 +566,7 @@ class VaultGUI:
 
         tabs_dict = {}
 
-        for name in ["🔑 Master Password", "📦 Enigma Backup", "📁 File Encryption", "🔤 Font Customizer", "🛡️ Security Audit", "📜 Audit Logs", "ℹ️ About"]:
+        for name in ["🔑 Master Password", "🛡️ SafeAuth", "📦 Enigma Backup", "📁 File Encryption", "🔤 Font Customizer", "🛡️ Security Audit", "📜 Audit Logs", "ℹ️ About"]:
             t_frame = tk.Frame(content_area, bg="#121212")
             tabs_dict[name] = t_frame
 
@@ -582,7 +643,147 @@ class VaultGUI:
 
         tk.Button(pw_frame, text="Update Master Password", command=execute_change, bg="#00ff66", fg="#121212", font=("Consolas", self.font_size, "bold"), width=24, relief=tk.FLAT).pack(pady=15)
 
-        # ---------------- TAB 2: BACKUP & ENIGMA SYNC ----------------
+        # ---------------- TAB 2: SAFEAUTH ----------------
+        tab_safeauth = tabs_dict["🛡️ SafeAuth"]
+        safeauth_frame = tk.Frame(tab_safeauth, bg="#121212")
+        safeauth_frame.pack(expand=True, fill=tk.BOTH, padx=25, pady=20)
+
+        tk.Label(safeauth_frame, text="SAFEAUTH AUTHENTICATION", fg="#00ff66", bg="#121212", font=("Consolas", self.font_size + 1, "bold")).pack(pady=10)
+        tk.Label(
+            safeauth_frame,
+            text="Require a 6-digit authenticator code after the master password.\nTurn it off when you do not want to use your phone every login.",
+            fg="#aaaaaa", bg="#121212", font=("Consolas", self.font_size - 1), justify=tk.CENTER
+        ).pack(pady=5)
+
+        safeauth_enabled_var = tk.BooleanVar(value=self.vault_data.get("_safeauth_enabled", False))
+        status_lbl = tk.Label(safeauth_frame, text="", bg="#121212", font=("Consolas", self.font_size, "bold"))
+        status_lbl.pack(pady=12)
+
+        def update_safeauth_status():
+            enabled = self.vault_data.get("_safeauth_enabled", False)
+            safeauth_enabled_var.set(enabled)
+            if enabled:
+                status_lbl.config(text="● SafeAuth: ENABLED", fg="#00ff66")
+            else:
+                status_lbl.config(text="● SafeAuth: DISABLED", fg="#ff9800")
+
+        # Container that holds the inline QR setup UI (empty until setup is triggered)
+        qr_setup_container = tk.Frame(safeauth_frame, bg="#121212")
+        qr_setup_container.pack(pady=5, fill=tk.X)
+
+        def clear_qr_setup():
+            for w in qr_setup_container.winfo_children():
+                w.destroy()
+
+        def show_inline_qr_setup():
+            """Builds a fresh authenticator secret + QR code directly inside the SafeAuth tab."""
+            clear_qr_setup()
+
+            new_secret = pyotp.random_base32()
+            totp_temp = pyotp.TOTP(new_secret)
+            uri = totp_temp.provisioning_uri(name="ShadowVault", issuer_name="ShadowVault")
+
+            tk.Label(qr_setup_container, text="SET UP SAFEAUTH", fg="#00ff66", bg="#121212", font=("Consolas", self.font_size, "bold")).pack(pady=(10, 3))
+            tk.Label(qr_setup_container, text="Scan this QR code with your Authenticator app.", fg="#ffffff", bg="#121212", font=("Consolas", self.font_size - 1)).pack(pady=2)
+
+            buffer = io.BytesIO()
+            segno.make(uri).save(buffer, scale=4, kind='png')
+            buffer.seek(0)
+            pil_img = Image.open(buffer)
+            qr_photo = ImageTk.PhotoImage(pil_img)
+            qr_label = tk.Label(qr_setup_container, image=qr_photo, bg="#121212")
+            qr_label.image = qr_photo  # keep a reference so it isn't garbage-collected
+            qr_label.pack(pady=10)
+
+            pyperclip.copy(new_secret)
+            tk.Label(qr_setup_container, text=f"Secret key copied to clipboard:\n{new_secret}", fg="#aaaaaa", bg="#121212", font=("Consolas", max(8, self.font_size - 3))).pack(pady=3)
+            tk.Label(qr_setup_container, text="Enter the 6-digit code to confirm setup:", fg="#ffffff", bg="#121212", font=("Consolas", self.font_size - 1)).pack(pady=5)
+
+            code_entry = tk.Entry(qr_setup_container, show="*", font=("Consolas", 12), width=15, bg="#1e1e1e", fg="#ffffff", insertbackground="white", justify="center")
+            code_entry.pack(pady=5, ipady=3)
+            code_entry.focus()
+
+            def verify_setup():
+                if totp_temp.verify(code_entry.get().strip()):
+                    self.vault_data["_2fa_secret"] = new_secret
+                    self.vault_data["_safeauth_enabled"] = True
+                    save_vault(self.vault_data, self.master_password)
+                    self.log_audit("SafeAuth Enabled", "New SafeAuth secret created and verified.")
+                    clear_qr_setup()
+                    update_safeauth_status()
+                    messagebox.showinfo("SafeAuth Enabled", "SafeAuth is enabled. The authenticator code will be required on your next login.")
+                else:
+                    self.log_audit("Failed SafeAuth Setup", "Invalid SafeAuth setup code provided.")
+                    messagebox.showerror("Error", "Invalid SafeAuth code. Try again.")
+
+            code_entry.bind("<Return>", lambda event: verify_setup())
+
+            btn_row = tk.Frame(qr_setup_container, bg="#121212")
+            btn_row.pack(pady=10)
+            tk.Button(btn_row, text="Verify & Enable", command=verify_setup, bg="#00ff66", fg="#121212", font=("Consolas", 10, "bold"), width=16, relief=tk.FLAT).pack(side=tk.LEFT, padx=5)
+            tk.Button(btn_row, text="Cancel", command=lambda: (clear_qr_setup(), update_safeauth_status()), bg="#2d2d2d", fg="#ffffff", font=("Consolas", 9), width=16, relief=tk.FLAT).pack(side=tk.LEFT, padx=5)
+
+        def enable_safeauth():
+            if "_2fa_secret" in self.vault_data:
+                self.vault_data["_safeauth_enabled"] = True
+                save_vault(self.vault_data, self.master_password)
+                self.log_audit("SafeAuth Enabled", "SafeAuth will be required at the next login.")
+                update_safeauth_status()
+                messagebox.showinfo("SafeAuth Enabled", "SafeAuth is now enabled. A 6-digit authenticator code will be required on the next login.")
+            else:
+                # First-time setup creates the authenticator secret and verifies it, inline, right here.
+                show_inline_qr_setup()
+
+        def disable_safeauth():
+            if not self.vault_data.get("_safeauth_enabled", False):
+                update_safeauth_status()
+                return
+            if messagebox.askyesno("Disable SafeAuth", "Disable SafeAuth? Your master password will be enough to unlock the vault."):
+                self.vault_data["_safeauth_enabled"] = False
+                save_vault(self.vault_data, self.master_password)
+                self.log_audit("SafeAuth Disabled", "SafeAuth requirement disabled by user.")
+                update_safeauth_status()
+                messagebox.showinfo("SafeAuth Disabled", "SafeAuth has been disabled. Your authenticator secret was kept, so you can enable it again later.")
+
+        def toggle_safeauth():
+            if safeauth_enabled_var.get():
+                enable_safeauth()
+            else:
+                disable_safeauth()
+
+        def reset_safeauth():
+            if not messagebox.askyesno(
+                "Reset SafeAuth",
+                "Reset SafeAuth? This will remove the current authenticator secret and disable SafeAuth.\n\nYou will need to scan a new QR code to set it up again."
+            ):
+                return
+            self.vault_data.pop("_2fa_secret", None)
+            self.vault_data["_safeauth_enabled"] = False
+            save_vault(self.vault_data, self.master_password)
+            self.log_audit("SafeAuth Reset", "Authenticator secret removed and SafeAuth disabled.")
+            update_safeauth_status()
+            show_inline_qr_setup()
+
+        tk.Checkbutton(
+            safeauth_frame, text="Use SafeAuth at login", variable=safeauth_enabled_var, command=toggle_safeauth,
+            bg="#121212", fg="#ffffff", selectcolor="#1e1e1e", activebackground="#121212", activeforeground="#ffffff",
+            font=("Consolas", self.font_size, "bold")
+        ).pack(pady=8)
+
+        tk.Button(
+            safeauth_frame, text="🔄 Reset SafeAuth", command=reset_safeauth,
+            bg="#ff4444", fg="#ffffff", font=("Consolas", self.font_size, "bold"), width=22, relief=tk.FLAT
+        ).pack(pady=12)
+
+        tk.Label(
+            safeauth_frame,
+            text="Reset removes the current authenticator secret and disables SafeAuth.\nYou will get a fresh QR setup right here when you enable it.",
+            fg="#777777", bg="#121212", font=("Consolas", max(8, self.font_size - 2)), justify=tk.CENTER
+        ).pack(pady=4)
+
+        update_safeauth_status()
+
+        # ---------------- TAB 3: BACKUP & ENIGMA SYNC ----------------
         tab_backup = tabs_dict["📦 Enigma Backup"]
         bak_container = tk.Frame(tab_backup, bg="#121212")
         bak_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
@@ -790,7 +991,7 @@ class VaultGUI:
 
         report = "=== SHADOW VAULT SECURITY REPORT (WITH HIBP) ===\n\n"
         for title, creds in self.vault_data.items():
-            if title in ("_2fa_secret", "_logs") or creds.get("type", "login") != "login":
+            if title in ("_2fa_secret", "_logs", "_safeauth_enabled") or not isinstance(creds, dict) or creds.get("type", "login") != "login":
                 continue
             total_sites += 1
             pwd = creds.get("pass", "")
@@ -867,7 +1068,7 @@ class VaultGUI:
         link_lbl.bind("<Enter>", lambda e: link_lbl.config(fg="#00ff66"))
         link_lbl.bind("<Leave>", lambda e: link_lbl.config(fg="#00bcd4"))
 
-        select_tab("🔑 Master Password")
+        select_tab(active_tab if active_tab in tabs_dict else "🔑 Master Password")
 
     def open_generator_popup(self, target_entry=None):
         popup = tk.Toplevel(self.root)
