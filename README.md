@@ -3,7 +3,7 @@
 **Shadow Vault** is a local-first, offline password manager built with Python and Tkinter. Everything is encrypted and stored on your own machine — no cloud, no external servers, no telemetry.
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
