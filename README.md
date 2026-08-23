@@ -26,7 +26,12 @@
 
 ## 📸 Screenshots
 
-*(Add screenshots of the login screen, dashboard, and settings tabs here.)*
+*<img width="811" height="598" alt="image" src="https://github.com/user-attachments/assets/6880c35c-0433-4eb0-b2da-b47efb4cc83f" />
+)*
+
+*<img width="1115" height="820" alt="Screenshot 2026-08-23 160008" src="https://github.com/user-attachments/assets/7f303a00-27e3-4566-981a-26274a2e73fb" />
+<img width="1180" height="878" alt="image" src="https://github.com/user-attachments/assets/515649d9-f16c-4a09-b9f3-53453219b556" />
+*
 
 ---
 
@@ -80,7 +85,7 @@ sudo apt install python3-tk
 4. Run the app:
 
    ```bash
-   python ShadowVault_SafeAuth.py
+   python vault.py
    ```
 
 ---
