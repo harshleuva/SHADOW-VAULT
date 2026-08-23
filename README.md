@@ -90,6 +90,10 @@ sudo apt install python3-tk
 
 ---
 
+
+
+<<  pyinstaller --onefile --windowed --icon=shadow.ico --name=vault vault.py >>
+
 ## 🚀 Usage
 
 1. On first launch, set a **master password**. This password is never stored — it's used to derive your encryption key on the fly via Argon2id.
